@@ -13,7 +13,7 @@ static struct idxd_desc *__get_desc(struct idxd_wq *wq, int idx, int cpu)
 	struct idxd_desc *desc;
 	struct idxd_device *idxd = wq->idxd;
 
-	desc = wq->descs[idx];
+	desc = &wq->descs[idx];
 	memset(desc->hw, 0, sizeof(struct dsa_hw_desc));
 	memset(desc->completion, 0, idxd->data->compl_size);
 	desc->cpu = cpu;

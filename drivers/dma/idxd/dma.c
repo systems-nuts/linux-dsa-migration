@@ -281,7 +281,7 @@ static int idxd_register_dma_channel(struct idxd_wq *wq)
 	list_add_tail(&chan->device_node, &dma->channels);
 
 	for (i = 0; i < wq->num_descs; i++) {
-		struct idxd_desc *desc = wq->descs[i];
+		struct idxd_desc *desc = &wq->descs[i];
 
 		dma_async_tx_descriptor_init(&desc->txd, chan);
 		desc->txd.tx_submit = idxd_dma_tx_submit;

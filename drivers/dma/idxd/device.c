@@ -41,66 +41,35 @@ void idxd_mask_error_interrupts(struct idxd_device *idxd)
 
 static void free_hw_descs(struct idxd_wq *wq)
 {
-	int i;
-
-	for (i = 0; i < wq->num_descs; i++)
-		kfree(wq->hw_descs[i]);
-
 	kfree(wq->hw_descs);
 }
 
 static int alloc_hw_descs(struct idxd_wq *wq, int num)
 {
 	struct device *dev = &wq->idxd->pdev->dev;
-	int i;
 	int node = dev_to_node(dev);
 
-	wq->hw_descs = kcalloc_node(num, sizeof(struct dsa_hw_desc *),
+	wq->hw_descs = kzalloc_node(sizeof(*wq->hw_descs) * num,
 				    GFP_KERNEL, node);
 	if (!wq->hw_descs)
 		return -ENOMEM;
-
-	for (i = 0; i < num; i++) {
-		wq->hw_descs[i] = kzalloc_node(sizeof(*wq->hw_descs[i]),
-					       GFP_KERNEL, node);
-		if (!wq->hw_descs[i]) {
-			free_hw_descs(wq);
-			return -ENOMEM;
-		}
-	}
 
 	return 0;
 }
 
 static void free_descs(struct idxd_wq *wq)
 {
-	int i;
-
-	for (i = 0; i < wq->num_descs; i++)
-		kfree(wq->descs[i]);
-
 	kfree(wq->descs);
 }
 
 static int alloc_descs(struct idxd_wq *wq, int num)
 {
 	struct device *dev = &wq->idxd->pdev->dev;
-	int i;
 	int node = dev_to_node(dev);
 
-	wq->descs = kcalloc_node(num, sizeof(struct idxd_desc *),
-				 GFP_KERNEL, node);
+	wq->descs = kzalloc_node(sizeof(*wq->descs) * num, GFP_KERNEL, node);
 	if (!wq->descs)
 		return -ENOMEM;
-
-	for (i = 0; i < num; i++) {
-		wq->descs[i] = kzalloc_node(sizeof(*wq->descs[i]),
-					    GFP_KERNEL, node);
-		if (!wq->descs[i]) {
-			free_descs(wq);
-			return -ENOMEM;
-		}
-	}
 
 	return 0;
 }
@@ -139,9 +108,9 @@ int idxd_wq_alloc_resources(struct idxd_wq *wq)
 		goto fail_sbitmap_init;
 
 	for (i = 0; i < num_descs; i++) {
-		struct idxd_desc *desc = wq->descs[i];
+		struct idxd_desc *desc = &wq->descs[i];
 
-		desc->hw = wq->hw_descs[i];
+		desc->hw = &wq->hw_descs[i];
 		if (idxd->data->type == IDXD_TYPE_DSA)
 			desc->completion = &wq->compls[i];
 		else if (idxd->data->type == IDXD_TYPE_IAX)

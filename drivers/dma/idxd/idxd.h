@@ -213,7 +213,7 @@ struct idxd_wq {
 	union wqcfg *wqcfg;
 	unsigned long *opcap_bmap;
 
-	struct dsa_hw_desc **hw_descs;
+	struct dsa_hw_desc *hw_descs;
 	int num_descs;
 	union {
 		struct dsa_completion_record *compls;
@@ -221,7 +221,7 @@ struct idxd_wq {
 	};
 	dma_addr_t compls_addr;
 	int compls_size;
-	struct idxd_desc **descs;
+	struct idxd_desc *descs;
 	struct sbitmap_queue sbq;
 	struct idxd_dma_chan *idxd_chan;
 	char name[WQ_NAME_SIZE + 1];
