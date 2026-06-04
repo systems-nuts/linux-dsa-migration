@@ -2271,50 +2271,27 @@ int find_suitable_fallback(struct free_area *area, unsigned int order,
 }
 
 /*
- * This function implements actual block claiming behaviour. If order is large
- * enough, we can claim the whole pageblock for the requested migratetype. If
- * not, we check the pageblock for constituent pages; if at least half of the
- * pages are free or compatible, we can still claim the whole block, so pages
- * freed in the future will be put on the correct free list.
+ * If enough free and compatible pages exist, change block type from
+ * start_migratetype to fallback_mt and move all free pages to the new
+ * type's freelist.
  */
-static struct page *
-try_to_claim_block(struct zone *zone, struct page *page,
-		   int current_order, int order, int start_type,
-		   int block_type, unsigned int alloc_flags)
+bool try_move_block_migratetype(struct zone *zone, struct page *page,
+		int block_type, int new_type)
 {
 	int free_pages, movable_pages, alike_pages;
 	unsigned long start_pfn;
 
-	/* Take ownership for orders >= pageblock_order */
-	if (current_order >= pageblock_order) {
-		unsigned int nr_added;
-
-		del_page_from_free_list(page, zone, current_order, block_type);
-		change_pageblock_range(page, current_order, start_type);
-		nr_added = expand(zone, page, order, current_order, start_type);
-		account_freepages(zone, nr_added, start_type);
-		return page;
-	}
-
-	/*
-	 * Boost watermarks to increase reclaim pressure to reduce the
-	 * likelihood of future fallbacks. Wake kswapd now as the node
-	 * may be balanced overall and kswapd will not wake naturally.
-	 */
-	if (boost_watermark(zone) && (alloc_flags & ALLOC_KSWAPD))
-		set_bit(ZONE_BOOSTED_WATERMARK, &zone->flags);
-
 	/* moving whole block can fail due to zone boundary conditions */
 	if (!prep_move_freepages_block(zone, page, &start_pfn, &free_pages,
 				       &movable_pages))
-		return NULL;
+		return false;
 
 	/*
 	 * Determine how many pages are compatible with our allocation.
 	 * For movable allocation, it's the number of movable pages which
 	 * we just obtained. For other types it's a bit more tricky.
 	 */
-	if (start_type == MIGRATE_MOVABLE) {
+	if (new_type == MIGRATE_MOVABLE) {
 		alike_pages = movable_pages;
 	} else {
 		/*
@@ -2336,10 +2313,47 @@ try_to_claim_block(struct zone *zone, struct page *page,
 	 */
 	if (free_pages + alike_pages >= (1 << (pageblock_order-1)) ||
 			page_group_by_mobility_disabled) {
-		__move_freepages_block(zone, start_pfn, block_type, start_type);
-		set_pageblock_migratetype(pfn_to_page(start_pfn), start_type);
-		return __rmqueue_smallest(zone, order, start_type);
+		__move_freepages_block(zone, start_pfn, block_type, new_type);
+		set_pageblock_migratetype(pfn_to_page(start_pfn), new_type);
+		return true;
 	}
+
+	return false;
+}
+
+/*
+ * This function implements actual block claiming behaviour. If order is large
+ * enough, we can claim the whole pageblock for the requested migratetype. If
+ * not, we check the pageblock for constituent pages; if at least half of the
+ * pages are free or compatible, we can still claim the whole block, so pages
+ * freed in the future will be put on the correct free list.
+ */
+static struct page *
+try_to_claim_block(struct zone *zone, struct page *page,
+		   int current_order, int order, int start_type,
+		   int block_type, unsigned int alloc_flags)
+{
+	/* Take ownership for orders >= pageblock_order */
+	if (current_order >= pageblock_order) {
+		unsigned int nr_added;
+
+		del_page_from_free_list(page, zone, current_order, block_type);
+		change_pageblock_range(page, current_order, start_type);
+		nr_added = expand(zone, page, order, current_order, start_type);
+		account_freepages(zone, nr_added, start_type);
+		return page;
+	}
+
+	/*
+	 * Boost watermarks to increase reclaim pressure to reduce the
+		 * likelihood of future fallbacks. Wake kswapd now as the node
+		 * may be balanced overall and kswapd will not wake naturally.
+	 */
+	if (boost_watermark(zone) && (alloc_flags & ALLOC_KSWAPD))
+		set_bit(ZONE_BOOSTED_WATERMARK, &zone->flags);
+
+	if (try_move_block_migratetype(zone, page, block_type, start_type))
+		return __rmqueue_smallest(zone, order, start_type);
 
 	return NULL;
 }
