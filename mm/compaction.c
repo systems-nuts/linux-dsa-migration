@@ -2524,16 +2524,8 @@ compaction_suit_allocation_order(struct zone *zone, unsigned int order,
 	return COMPACT_CONTINUE;
 }
 
-static enum compact_result
-compact_zone(struct compact_control *cc, struct capture_control *capc)
+static void compact_cc_init(struct compact_control *cc)
 {
-	enum compact_result ret;
-	unsigned long start_pfn = cc->zone->zone_start_pfn;
-	unsigned long end_pfn = zone_end_pfn(cc->zone);
-	unsigned long last_migrated_pfn;
-	const bool sync = cc->mode != MIGRATE_ASYNC;
-	bool update_cached;
-	unsigned int nr_succeeded = 0, nr_migratepages;
 	int order;
 
 	/*
@@ -2547,6 +2539,20 @@ compact_zone(struct compact_control *cc, struct capture_control *capc)
 	for (order = 0; order < NR_PAGE_ORDERS; order++)
 		INIT_LIST_HEAD(&cc->freepages[order]);
 	INIT_LIST_HEAD(&cc->migratepages);
+}
+
+static enum compact_result
+compact_zone(struct compact_control *cc, struct capture_control *capc)
+{
+	enum compact_result ret;
+	unsigned long start_pfn = cc->zone->zone_start_pfn;
+	unsigned long end_pfn = zone_end_pfn(cc->zone);
+	unsigned long last_migrated_pfn;
+	const bool sync = cc->mode != MIGRATE_ASYNC;
+	bool update_cached;
+	unsigned int nr_succeeded = 0, nr_migratepages;
+
+	compact_cc_init(cc);
 
 	cc->migratetype = gfp_migratetype(cc->gfp_mask);
 
