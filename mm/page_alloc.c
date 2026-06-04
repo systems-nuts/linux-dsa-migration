@@ -2197,6 +2197,25 @@ static inline bool boost_watermark(struct zone *zone)
 }
 
 /*
+ * For active anti fragmentation, if an allocation falls back to a movable
+ * block, try to move out the movable allocations when kswapd kicks
+ * compaction.
+ */
+static bool noinline should_defragment_block(unsigned long pfn, int order,
+		int start_migratetype, int fallback_mt)
+{
+	if (order >= pageblock_order)
+		return false;
+
+	if (start_migratetype == MIGRATE_MOVABLE ||
+			fallback_mt == MIGRATE_MOVABLE) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
+/*
  * When we are falling back to another migratetype during allocation, should we
  * try to claim an entire block to satisfy further allocations, instead of
  * polluting multiple pageblocks?
@@ -2408,6 +2427,15 @@ __rmqueue_claim(struct zone *zone, int order, int start_migratetype,
 					  start_migratetype, fallback_mt,
 					  alloc_flags);
 		if (page) {
+			/* Ok, this block is lost to an unmovable allocation,
+			 * evict all movable allocations to restrict unmovable
+			 * spread.
+			 */
+			if (should_defragment_block(page_to_pfn(page), current_order,
+						start_migratetype, fallback_mt)) {
+				compaction_queue_block(zone, page_to_pfn(page));
+			}
+
 			trace_mm_page_alloc_extfrag(page, order, current_order,
 						    start_migratetype, fallback_mt);
 			return page;
@@ -2438,6 +2466,13 @@ __rmqueue_steal(struct zone *zone, int order, int start_migratetype)
 
 		page = get_page_from_free_area(area, fallback_mt);
 		page_del_and_expand(zone, page, order, current_order, fallback_mt);
+
+		/* Read the comment in __rmqueue_claim() */
+		if (should_defragment_block(page_to_pfn(page), current_order,
+					start_migratetype, fallback_mt)) {
+			compaction_queue_block(zone, page_to_pfn(page));
+		}
+
 		trace_mm_page_alloc_extfrag(page, order, current_order,
 					    start_migratetype, fallback_mt);
 		return page;
