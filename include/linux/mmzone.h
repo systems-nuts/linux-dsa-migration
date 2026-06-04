@@ -1139,6 +1139,11 @@ struct zone {
 	bool			compact_blockskip_flush;
 #endif
 
+#ifdef CONFIG_ACTIVE_ANTI_FRAGMENTATION
+#define COMPACT_QUEUE_LENGTH	128
+	unsigned long		compact_queue[COMPACT_QUEUE_LENGTH];
+	int			nr_compact;
+#endif
 	bool			contiguous;
 
 	CACHELINE_PADDING(_pad3_);

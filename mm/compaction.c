@@ -3075,6 +3075,140 @@ static bool kcompactd_node_suitable(pg_data_t *pgdat)
 	return false;
 }
 
+/*
+ * Active anti-fragmentation
+ */
+#ifdef CONFIG_ACTIVE_ANTI_FRAGMENTATION
+static noinline int compact_block(struct compact_control *cc, unsigned long block_pfn)
+{
+	unsigned long end_pfn = pageblock_end_pfn(block_pfn);
+	struct page *page = pfn_to_page(block_pfn);
+	const bool sync = cc->mode != MIGRATE_ASYNC;
+	unsigned int nr_succeeded, nr_migratepages;
+	int ret = COMPACT_SUCCESS;
+	int block_type, err;
+	unsigned long flags;
+
+	cc->fast_start_pfn = 0;
+	cc->migrate_pfn = block_pfn;
+	cc->free_pfn = pageblock_start_pfn(zone_end_pfn(cc->zone) - 1);
+
+	trace_mm_compaction_begin(cc, block_pfn, end_pfn, sync);
+
+	err = isolate_migratepages_block(cc, block_pfn, end_pfn, 0);
+	if (err || !cc->nr_migratepages) {
+		ret = COMPACT_CONTENDED;
+		goto out;
+	}
+
+	nr_migratepages = cc->nr_migratepages;
+	err = migrate_pages(&cc->migratepages, compaction_alloc,
+			compaction_free, (unsigned long)cc, cc->mode,
+			MR_COMPACTION, &nr_succeeded);
+
+	trace_mm_compaction_migratepages(nr_migratepages, nr_succeeded);
+
+	cc->nr_migratepages = 0;
+	if (err) {
+		putback_movable_pages(&cc->migratepages);
+		ret = COMPACT_CONTENDED;
+		goto out;
+	}
+out:
+	BUG_ON(!list_empty(&cc->migratepages));
+
+	trace_mm_compaction_end(cc, block_pfn, end_pfn, sync, ret);
+
+	return ret;
+}
+
+static noinline void compact_zonequeue_blocks(struct zone *zone)
+{
+	int limit = READ_ONCE(zone->nr_compact);
+	unsigned long block_pfn;
+	unsigned long flags;
+	int i;
+	struct compact_control cc = {
+		.order = COMPACTION_HPAGE_ORDER,
+		.zone = zone,
+		.mode = MIGRATE_ASYNC,
+		.ignore_skip_hint = true,
+		.finish_pageblock = true,
+		.gfp_mask = GFP_KERNEL,
+		.migratetype = MIGRATE_MOVABLE,
+	};
+
+	compact_cc_init(&cc);
+
+	/* lru_add_drain_all could be expensive with involving other CPUs */
+	lru_add_drain();
+
+	for (i = 0; i < limit; i++) {
+		spin_lock_irqsave(&zone->lock, flags);
+		if (!zone->nr_compact) {
+			spin_unlock_irqrestore(&zone->lock, flags);
+			break;
+		}
+		block_pfn = zone->compact_queue[--zone->nr_compact];
+		spin_unlock_irqrestore(&zone->lock, flags);
+
+		BUG_ON(!zone_spans_pfn(zone, block_pfn));
+
+		compact_block(&cc, block_pfn);
+
+		cc.contended = false;
+	}
+
+	if (cc.nr_freepages > 0)
+		release_free_list(cc.freepages);
+
+	count_compact_events(COMPACTMIGRATE_SCANNED, cc.total_migrate_scanned);
+	count_compact_events(COMPACTFREE_SCANNED, cc.total_free_scanned);
+}
+
+static noinline void kcompactd_queue_do_work(pg_data_t *pgdat)
+{
+	struct zone *zone;
+	int zoneid;
+
+	for (zoneid = 0; zoneid < MAX_NR_ZONES; zoneid++) {
+		zone = &pgdat->node_zones[zoneid];
+		if (!populated_zone(zone))
+			continue;
+
+		if (READ_ONCE(zone->nr_compact))
+			compact_zonequeue_blocks(zone);
+	}
+}
+
+/*
+ * Must be called with zone_lock taken
+ *
+ * We rely on kwapd to wake up kcompactd when pages are reclaimed
+ * to make sure we can succeed in freepage isolation.
+ *
+ * Returns 0 if queued, else -ENOSPC.
+ */
+int noinline compaction_queue_block(struct zone *zone, unsigned long pfn)
+{
+	unsigned long block_pfn = pageblock_start_pfn(pfn);
+	int i;
+
+	if (zone->nr_compact < COMPACT_QUEUE_LENGTH) {
+		/*
+		 * Sometimes, fallbacks happen several times on
+		 * the same pageblock. Avoid duplicates.
+		 */
+		for (i = 0; i < zone->nr_compact; i++)
+			if (zone->compact_queue[i] == block_pfn)
+				return 0;
+		zone->compact_queue[zone->nr_compact++] = block_pfn;
+		return 0;
+	}
+	return -ENOSPC;
+}
+#endif /* CONFIG_ACTIVE_ANTI_FRAGMENTATION */
+
 static void kcompactd_do_work(pg_data_t *pgdat)
 {
 	/*
@@ -3212,6 +3346,9 @@ static int kcompactd(void *p)
 			!pgdat->proactive_compact_trigger) {
 
 			psi_memstall_enter(&pflags);
+#ifdef CONFIG_ACTIVE_ANTI_FRAGMENTATION
+			kcompactd_queue_do_work(pgdat);
+#endif
 			kcompactd_do_work(pgdat);
 			psi_memstall_leave(&pflags);
 			/*

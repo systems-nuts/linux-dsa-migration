@@ -613,6 +613,16 @@ config COMPACTION
 	  it and then we would be really interested to hear about that at
 	  linux-mm@kvack.org.
 
+config ACTIVE_ANTI_FRAGMENTATION
+	bool "Active anti-fragmentation"
+	depends on COMPACTION
+	help
+	  Enable queued pageblock evacuation from kcompactd. This lets the
+	  allocator queue mixed pageblocks for asynchronous migration so they
+	  can be restored to their intended migratetype.
+
+	  If unsure, say N.
+
 config COMPACT_UNEVICTABLE_DEFAULT
 	int
 	depends on COMPACTION

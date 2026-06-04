@@ -1448,6 +1448,9 @@ void __meminit init_currently_empty_zone(struct zone *zone,
 			zone_start_pfn, (zone_start_pfn + size));
 
 	zone_init_free_lists(zone);
+#ifdef CONFIG_ACTIVE_ANTI_FRAGMENTATION
+	zone->nr_compact = 0;
+#endif
 	zone->initialized = 1;
 }
 

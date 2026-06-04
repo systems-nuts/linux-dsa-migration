@@ -107,6 +107,15 @@ extern void __meminit kcompactd_run(int nid);
 extern void __meminit kcompactd_stop(int nid);
 extern void wakeup_kcompactd(pg_data_t *pgdat, int order, int highest_zoneidx);
 
+#ifdef CONFIG_ACTIVE_ANTI_FRAGMENTATION
+extern int compaction_queue_block(struct zone *zone, unsigned long pfn);
+#else
+static inline int compaction_queue_block(struct zone *zone, unsigned long pfn)
+{
+	return 0;
+}
+#endif
+
 #else
 static inline void reset_isolation_suitable(pg_data_t *pgdat)
 {
@@ -131,6 +140,10 @@ static inline void wakeup_kcompactd(pg_data_t *pgdat,
 {
 }
 
+static inline int compaction_queue_block(struct zone *zone, unsigned long pfn)
+{
+	return 0;
+}
 #endif /* CONFIG_COMPACTION */
 
 struct node;
