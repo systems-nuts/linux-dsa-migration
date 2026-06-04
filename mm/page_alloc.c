@@ -2334,6 +2334,7 @@ bool try_move_block_migratetype(struct zone *zone, struct page *page,
 			page_group_by_mobility_disabled) {
 		__move_freepages_block(zone, start_pfn, block_type, new_type);
 		set_pageblock_migratetype(pfn_to_page(start_pfn), new_type);
+		trace_mm_move_block_migratetype(zone, page, free_pages, block_type, new_type);
 		return true;
 	}
 

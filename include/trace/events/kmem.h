@@ -266,6 +266,37 @@ TRACE_EVENT(mm_page_pcpu_drain,
 		__entry->order, __entry->migratetype)
 );
 
+TRACE_EVENT(mm_move_block_migratetype,
+
+		TP_PROTO(struct zone *zone, struct page *page,
+			int free_pages, int block_type, int new_type),
+
+		TP_ARGS(zone, page, free_pages, block_type, new_type),
+
+		TP_STRUCT__entry(
+			__string(	name, 		zone->name	)
+			__field(	unsigned long,	pfn		)
+			__field(	int,		free_pages	)
+			__field(	int,		block_type	)
+			__field(	int,		new_type	)
+		),
+
+		TP_fast_assign(
+			__assign_str(name);
+			__entry->pfn 		= page_to_pfn(page);
+			__entry->free_pages	= free_pages;
+			__entry->block_type 	= block_type;
+			__entry->new_type 	= new_type;
+		),
+
+		TP_printk("zone=%s pfn=0x%lx free_pages=%d block_type=%d new_type=%d",
+				__get_str(name),
+				__entry->pfn,
+				__entry->free_pages,
+				__entry->block_type,
+				__entry->new_type)
+);
+
 TRACE_EVENT(mm_page_alloc_extfrag,
 
 	TP_PROTO(struct page *page,
