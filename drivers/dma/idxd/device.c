@@ -41,18 +41,31 @@ void idxd_mask_error_interrupts(struct idxd_device *idxd)
 
 static void free_hw_descs(struct idxd_wq *wq)
 {
-	kfree(wq->hw_descs);
+	struct device *dev = &wq->idxd->pdev->dev;
+
+	dma_free_coherent(dev, wq->num_descs, wq->hw_descs, wq->hw_descs_addr);
+	kfree(wq->hw_batch_descs);
 }
 
-static int alloc_hw_descs(struct idxd_wq *wq, int num)
+static int alloc_hw_descs(struct idxd_wq *wq, int num, int num_batch_descs)
 {
 	struct device *dev = &wq->idxd->pdev->dev;
 	int node = dev_to_node(dev);
 
-	wq->hw_descs = kzalloc_node(sizeof(*wq->hw_descs) * num,
-				    GFP_KERNEL, node);
+	/* When batching is used, we need the DMA address of the
+	 * descriptors.
+	 */
+	wq->hw_descs = dma_alloc_coherent(dev, sizeof(*wq->hw_descs) * num,
+					  &wq->hw_descs_addr, GFP_KERNEL);
 	if (!wq->hw_descs)
 		return -ENOMEM;
+
+	wq->hw_batch_descs = kzalloc_node(sizeof(*wq->hw_batch_descs) * wq->num_batch_descs,
+					  GFP_KERNEL, node);
+	if (!wq->hw_batch_descs) {
+		dma_free_coherent(dev, num, wq->hw_descs, wq->hw_descs_addr);
+		return -ENOMEM;
+	}
 
 	return 0;
 }
@@ -60,9 +73,10 @@ static int alloc_hw_descs(struct idxd_wq *wq, int num)
 static void free_descs(struct idxd_wq *wq)
 {
 	kfree(wq->descs);
+	kfree(wq->batch_descs);
 }
 
-static int alloc_descs(struct idxd_wq *wq, int num)
+static int alloc_descs(struct idxd_wq *wq, int num, int num_batch_descs)
 {
 	struct device *dev = &wq->idxd->pdev->dev;
 	int node = dev_to_node(dev);
@@ -70,6 +84,13 @@ static int alloc_descs(struct idxd_wq *wq, int num)
 	wq->descs = kzalloc_node(sizeof(*wq->descs) * num, GFP_KERNEL, node);
 	if (!wq->descs)
 		return -ENOMEM;
+
+	wq->batch_descs = kzalloc_node(sizeof(*wq->batch_descs) * num_batch_descs,
+				       GFP_KERNEL, node);
+	if (!wq->batch_descs) {
+		kfree(wq->descs);
+		return -ENOMEM;
+	}
 
 	return 0;
 }
@@ -79,7 +100,7 @@ int idxd_wq_alloc_resources(struct idxd_wq *wq)
 {
 	struct idxd_device *idxd = wq->idxd;
 	struct device *dev = &idxd->pdev->dev;
-	int rc, num_descs, i;
+	int rc, num_descs, num_bdescs, i;
 
 	if (wq->type != IDXD_WQT_KERNEL)
 		return 0;
@@ -87,7 +108,10 @@ int idxd_wq_alloc_resources(struct idxd_wq *wq)
 	num_descs = wq_dedicated(wq) ? wq->size : wq->threshold;
 	wq->num_descs = num_descs;
 
-	rc = alloc_hw_descs(wq, num_descs);
+	num_bdescs = DIV_ROUND_UP(wq->size, min(wq->size, wq->max_batch_size));
+	wq->num_batch_descs = num_bdescs;
+
+	rc = alloc_hw_descs(wq, num_descs, num_bdescs);
 	if (rc < 0)
 		return rc;
 
@@ -97,8 +121,13 @@ int idxd_wq_alloc_resources(struct idxd_wq *wq)
 		rc = -ENOMEM;
 		goto fail_alloc_compls;
 	}
+	wq->batch_compls = dma_alloc_coherent(dev, wq->compls_size, &wq->batch_compls_addr, GFP_KERNEL);
+	if (!wq->batch_compls) {
+		rc = -ENOMEM;
+		goto fail_alloc_batch_compls;
+	}
 
-	rc = alloc_descs(wq, num_descs);
+	rc = alloc_descs(wq, num_descs, num_bdescs);
 	if (rc < 0)
 		goto fail_alloc_descs;
 
@@ -121,11 +150,24 @@ int idxd_wq_alloc_resources(struct idxd_wq *wq)
 		desc->cpu = -1;
 	}
 
+	for (i = 0; i < num_bdescs; i++) {
+		struct idxd_desc *desc = &wq->batch_descs[i];
+
+		desc->hw = &wq->hw_batch_descs[i];
+		desc->completion = &wq->batch_compls[i];
+		desc->compl_dma = wq->batch_compls_addr + idxd->data->compl_size * i;
+		desc->id = num_descs + i;
+		desc->wq = wq;
+		desc->cpu = -1;
+	}
+
 	return 0;
 
  fail_sbitmap_init:
 	free_descs(wq);
  fail_alloc_descs:
+	dma_free_coherent(dev, wq->compls_size, wq->batch_compls, wq->batch_compls_addr);
+ fail_alloc_batch_compls:
 	dma_free_coherent(dev, wq->compls_size, wq->compls, wq->compls_addr);
  fail_alloc_compls:
 	free_hw_descs(wq);
@@ -143,6 +185,7 @@ void idxd_wq_free_resources(struct idxd_wq *wq)
 	free_hw_descs(wq);
 	free_descs(wq);
 	dma_free_coherent(dev, wq->compls_size, wq->compls, wq->compls_addr);
+	dma_free_coherent(dev, wq->compls_size, wq->batch_compls, wq->batch_compls_addr);
 	sbitmap_queue_free(&wq->sbq);
 	wq->type = IDXD_WQT_NONE;
 }

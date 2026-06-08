@@ -214,14 +214,20 @@ struct idxd_wq {
 	unsigned long *opcap_bmap;
 
 	struct dsa_hw_desc *hw_descs;
+	dma_addr_t hw_descs_addr;
 	int num_descs;
+	struct dsa_hw_desc *hw_batch_descs;
+	int num_batch_descs;
 	union {
 		struct dsa_completion_record *compls;
 		struct iax_completion_record *iax_compls;
 	};
 	dma_addr_t compls_addr;
+	struct dsa_completion_record *batch_compls;
+	dma_addr_t batch_compls_addr;
 	int compls_size;
 	struct idxd_desc *descs;
+	struct idxd_desc *batch_descs;
 	struct sbitmap_queue sbq;
 	struct idxd_dma_chan *idxd_chan;
 	char name[WQ_NAME_SIZE + 1];
