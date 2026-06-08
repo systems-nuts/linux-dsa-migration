@@ -759,6 +759,25 @@ static inline void idxd_desc_complete(struct idxd_desc *desc,
 				   &desc->txd, &status);
 }
 
+static inline void idxd_prep_desc_common(struct idxd_wq *wq,
+					 struct dsa_hw_desc *hw, char opcode,
+					 u64 addr_f1, u64 addr_f2, u64 len,
+					 u64 compl, u32 flags)
+{
+	hw->flags = flags;
+	hw->opcode = opcode;
+	hw->src_addr = addr_f1;
+	hw->dst_addr = addr_f2;
+	hw->xfer_size = len;
+	/*
+	 * For dedicated WQ, this field is ignored and HW will use the WQCFG.priv
+	 * field instead. This field should be set to 0 for kernel descriptors
+	 * since kernel DMA on VT-d supports "user" privilege only.
+	 */
+	hw->priv = 0;
+	hw->completion_addr = compl;
+}
+
 int idxd_register_devices(struct idxd_device *idxd);
 void idxd_unregister_devices(struct idxd_device *idxd);
 void idxd_wqs_quiesce(struct idxd_device *idxd);
