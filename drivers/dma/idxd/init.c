@@ -1353,6 +1353,12 @@ static int __init idxd_init_module(void)
 	if (err < 0)
 		goto err_idxd_user_driver_register;
 
+	err = idxd_driver_register(&idxd_fast_drv);
+	if (err < 0) {
+		pr_err("error registering fast drv\n");
+		goto err_idxd_fast_driver_register;
+	}
+
 	err = idxd_cdev_register();
 	if (err)
 		goto err_cdev_register;
@@ -1372,6 +1378,8 @@ err_pci_register:
 err_debugfs:
 	idxd_cdev_remove();
 err_cdev_register:
+	idxd_driver_unregister(&idxd_fast_drv);
+err_idxd_fast_driver_register:
 	idxd_driver_unregister(&idxd_user_drv);
 err_idxd_user_driver_register:
 	idxd_driver_unregister(&idxd_dmaengine_drv);
@@ -1384,6 +1392,7 @@ module_init(idxd_init_module);
 
 static void __exit idxd_exit_module(void)
 {
+	idxd_driver_unregister(&idxd_fast_drv);
 	idxd_driver_unregister(&idxd_user_drv);
 	idxd_driver_unregister(&idxd_dmaengine_drv);
 	idxd_driver_unregister(&idxd_drv);

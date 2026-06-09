@@ -306,6 +306,7 @@ config INTEL_IDXD
 	depends on PCI_PASID
 	depends on SBITMAP
 	select DMA_ENGINE
+	select MIGRATION_COPY_OFFLOAD
 	help
 	  Enable support for the Intel(R) data accelerators present
 	  in Intel Xeon CPU.

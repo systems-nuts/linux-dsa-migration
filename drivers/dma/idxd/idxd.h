@@ -81,6 +81,7 @@ extern struct idxd_device_driver dsa_drv;
 extern struct idxd_device_driver idxd_drv;
 extern struct idxd_device_driver idxd_dmaengine_drv;
 extern struct idxd_device_driver idxd_user_drv;
+extern struct idxd_device_driver idxd_fast_drv;
 
 #define INVALID_INT_HANDLE	-1
 struct idxd_irq_entry {
@@ -234,6 +235,10 @@ struct idxd_wq {
 	u64 max_xfer_bytes;
 	u32 max_batch_size;
 	u32 max_sgl_size;
+
+	bool in_flight;
+	struct idxd_desc *descs_in_flight;
+	int nr_descs_in_flight;
 
 	/* Lock to protect upasid_xa access. */
 	struct mutex uc_lock;
@@ -436,6 +441,7 @@ struct idxd_desc {
 	int id;
 	int cpu;
 	struct idxd_wq *wq;
+	bool dma_completed;
 };
 
 /*
