@@ -2352,9 +2352,6 @@ static int __add_folio_for_migration(struct folio *folio, int node,
 	if (folio_is_zone_device(folio))
 		return -ENOENT;
 
-	if (folio_nid(folio) == node)
-		return 0;
-
 	if (folio_maybe_mapped_shared(folio) && !migrate_all)
 		return -EACCES;
 
