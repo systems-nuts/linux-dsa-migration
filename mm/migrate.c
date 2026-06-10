@@ -1891,6 +1891,7 @@ static int migrate_pages_batch(struct list_head *from,
 			!list_empty(from) && !list_is_singular(from));
 
 	do_batch = migrate_offload_do_batch(reason);
+	trace_migrate_pages_batch_unmap_begin(mode, reason, nr_batch);
 
 	for (pass = 0; pass < nr_pass && retry; pass++) {
 		retry = 0;
@@ -2023,10 +2024,13 @@ static int migrate_pages_batch(struct list_head *from,
 				/* nr_failed isn't updated for not used */
 				stats->nr_thp_failed += thp_retry;
 				rc_saved = rc;
-				if (list_empty(&unmap_batch) && list_empty(&unmap_single))
+				if (list_empty(&unmap_batch) && list_empty(&unmap_single)) {
+					trace_migrate_pages_batch_unmap_end(mode,
+							reason, nr_batch);
 					goto out;
-				else
+				} else {
 					goto move;
+				}
 			case -EAGAIN:
 				retry++;
 				thp_retry += is_thp;
@@ -2060,13 +2064,19 @@ static int migrate_pages_batch(struct list_head *from,
 	stats->nr_thp_failed += thp_retry;
 	stats->nr_failed_pages += nr_retry_pages;
 move:
+	trace_migrate_pages_batch_unmap_end(mode, reason, nr_batch);
+
 	/* Flush TLBs for all unmapped folios */
+	trace_migrate_pages_batch_tlb_flush_begin(mode, reason, nr_batch);
 	try_to_unmap_flush();
+	trace_migrate_pages_batch_tlb_flush_end(mode, reason, nr_batch);
 
 	/* Batch-copy eligible folios before the move phase */
 	if (!list_empty(&unmap_batch)) {
+		trace_migrate_offload_batch_copy_begin(mode, reason, nr_batch);
 		rc = migrate_offload_batch_copy(&dst_batch, &unmap_batch,
 						nr_batch);
+		trace_migrate_offload_batch_copy_end(mode, reason, nr_batch, rc);
 		batch_copied = (rc == 0);
 	}
 
@@ -2076,16 +2086,26 @@ move:
 		thp_retry = 0;
 		nr_retry_pages = 0;
 
-		if (!list_empty(&unmap_batch))
+		if (!list_empty(&unmap_batch)) {
+			trace_migrate_folios_move_begin(mode, reason, true,
+					batch_copied, nr_batch);
 			migrate_folios_move(&unmap_batch, &dst_batch, put_new_folio,
 					private, mode, reason, ret_folios, stats,
 					&retry, &thp_retry, &nr_failed,
 					&nr_retry_pages, batch_copied);
-		if (!list_empty(&unmap_single))
+			trace_migrate_folios_move_end(mode, reason, true,
+					batch_copied, nr_batch);
+		}
+		if (!list_empty(&unmap_single)) {
+			trace_migrate_folios_move_begin(mode, reason, false,
+					false, 0);
 			migrate_folios_move(&unmap_single, &dst_single,	put_new_folio,
 					private, mode, reason, ret_folios, stats,
 					&retry, &thp_retry, &nr_failed,
 					&nr_retry_pages, false);
+			trace_migrate_folios_move_end(mode, reason, false,
+					false, 0);
+		}
 	}
 	nr_failed += retry;
 	stats->nr_thp_failed += thp_retry;

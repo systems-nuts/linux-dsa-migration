@@ -110,6 +110,114 @@ TRACE_EVENT(mm_migrate_pages_start,
 		  __print_symbolic(__entry->reason, MIGRATE_REASON))
 );
 
+DECLARE_EVENT_CLASS(migrate_pages_batch_phase,
+
+	TP_PROTO(enum migrate_mode mode, int reason, unsigned int nr_batch),
+
+	TP_ARGS(mode, reason, nr_batch),
+
+	TP_STRUCT__entry(
+		__field(enum migrate_mode, mode)
+		__field(int, reason)
+		__field(unsigned int, nr_batch)
+	),
+
+	TP_fast_assign(
+		__entry->mode = mode;
+		__entry->reason = reason;
+		__entry->nr_batch = nr_batch;
+	),
+
+	TP_printk("mode=%s reason=%s nr_batch=%u",
+		  __print_symbolic(__entry->mode, MIGRATE_MODE),
+		  __print_symbolic(__entry->reason, MIGRATE_REASON),
+		  __entry->nr_batch)
+);
+
+#define DEFINE_MIGRATE_PAGES_BATCH_PHASE_EVENT(name)		\
+	DEFINE_EVENT(migrate_pages_batch_phase, name,		\
+		TP_PROTO(enum migrate_mode mode, int reason,	\
+			 unsigned int nr_batch),		\
+		TP_ARGS(mode, reason, nr_batch))
+
+DEFINE_MIGRATE_PAGES_BATCH_PHASE_EVENT(migrate_pages_batch_unmap_begin);
+DEFINE_MIGRATE_PAGES_BATCH_PHASE_EVENT(migrate_pages_batch_unmap_end);
+DEFINE_MIGRATE_PAGES_BATCH_PHASE_EVENT(migrate_pages_batch_tlb_flush_begin);
+DEFINE_MIGRATE_PAGES_BATCH_PHASE_EVENT(migrate_pages_batch_tlb_flush_end);
+DEFINE_MIGRATE_PAGES_BATCH_PHASE_EVENT(migrate_offload_batch_copy_begin);
+
+TRACE_EVENT(migrate_offload_batch_copy_end,
+
+	TP_PROTO(enum migrate_mode mode, int reason, unsigned int nr_batch,
+		 int rc),
+
+	TP_ARGS(mode, reason, nr_batch, rc),
+
+	TP_STRUCT__entry(
+		__field(enum migrate_mode, mode)
+		__field(int, reason)
+		__field(unsigned int, nr_batch)
+		__field(int, rc)
+	),
+
+	TP_fast_assign(
+		__entry->mode = mode;
+		__entry->reason = reason;
+		__entry->nr_batch = nr_batch;
+		__entry->rc = rc;
+	),
+
+	TP_printk("mode=%s reason=%s nr_batch=%u rc=%d",
+		  __print_symbolic(__entry->mode, MIGRATE_MODE),
+		  __print_symbolic(__entry->reason, MIGRATE_REASON),
+		  __entry->nr_batch,
+		  __entry->rc)
+);
+
+DECLARE_EVENT_CLASS(migrate_folios_move_phase,
+
+	TP_PROTO(enum migrate_mode mode, int reason, bool batched,
+		 bool already_copied, unsigned int nr_batch),
+
+	TP_ARGS(mode, reason, batched, already_copied, nr_batch),
+
+	TP_STRUCT__entry(
+		__field(enum migrate_mode, mode)
+		__field(int, reason)
+		__field(bool, batched)
+		__field(bool, already_copied)
+		__field(unsigned int, nr_batch)
+	),
+
+	TP_fast_assign(
+		__entry->mode = mode;
+		__entry->reason = reason;
+		__entry->batched = batched;
+		__entry->already_copied = already_copied;
+		__entry->nr_batch = nr_batch;
+	),
+
+	TP_printk("mode=%s reason=%s batched=%d already_copied=%d nr_batch=%u",
+		  __print_symbolic(__entry->mode, MIGRATE_MODE),
+		  __print_symbolic(__entry->reason, MIGRATE_REASON),
+		  __entry->batched,
+		  __entry->already_copied,
+		  __entry->nr_batch)
+);
+
+#define DEFINE_MIGRATE_FOLIOS_MOVE_PHASE_EVENT(name)		\
+	DEFINE_EVENT(migrate_folios_move_phase, name,		\
+		TP_PROTO(enum migrate_mode mode, int reason,	\
+			 bool batched, bool already_copied,	\
+			 unsigned int nr_batch),		\
+		TP_ARGS(mode, reason, batched, already_copied, nr_batch))
+
+DEFINE_MIGRATE_FOLIOS_MOVE_PHASE_EVENT(migrate_folios_move_begin);
+DEFINE_MIGRATE_FOLIOS_MOVE_PHASE_EVENT(migrate_folios_move_end);
+
+#undef DEFINE_MIGRATE_FOLIOS_MOVE_PHASE_EVENT
+#undef DEFINE_MIGRATE_PAGES_BATCH_PHASE_EVENT
+
 DECLARE_EVENT_CLASS(migration_pte,
 
 		TP_PROTO(unsigned long addr, unsigned long pte, int order),

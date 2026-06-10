@@ -21,12 +21,15 @@
 #include "registers.h"
 #include "idxd.h"
 
+#define CREATE_TRACE_POINTS
+#include "folio_dma_trace.h"
+
 
 /*
  * if IOMMU is in passthrough mode with cmdline having iommu.passthrough=1,
  * then we don't have to call dma_map_*().
  */
-#define IOMMU_PT
+#undef IOMMU_PT
 
 static bool idxd_migrator_enabled = false;
 
@@ -273,12 +276,19 @@ static int folios_copy_dma(struct list_head *dst_list,
 {
 	int ret;
 
-	if (!mutex_trylock(&idxd_lock))
-		return -EBUSY;
+	trace_idxd_folios_copy_dma_begin(nr_folios);
+
+	if (!mutex_trylock(&idxd_lock)) {
+		ret = -EBUSY;
+		goto out;
+	}
+
 	ret = idxd_copy_folios(dst_list, src_list, nr_folios,
 			false, NUMA_NO_NODE, NULL);
 	mutex_unlock(&idxd_lock);
 
+out:
+	trace_idxd_folios_copy_dma_end(nr_folios, ret);
 	return ret;
 }
 
