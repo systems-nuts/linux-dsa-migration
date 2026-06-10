@@ -46,6 +46,7 @@
 #include <linux/jump_label.h>
 #include <linux/static_call.h>
 #include <linux/migrate_copy_offload.h>
+#include <linux/slab.h>
 
 #include <asm/tlbflush.h>
 
@@ -1410,39 +1411,79 @@ out:
 	return rc;
 }
 
+struct folio_migration_state {
+	struct folio *src;
+	struct folio *dst;
+	int old_folio_state;
+	struct anon_vma *anon_vma;
+	int nr_pages;
+	bool src_deferred_split;
+	bool src_partially_mapped;
+	bool is_thp;
+	bool movable_ops;
+};
+
 /* Migrate the folio to the newly allocated folio in dst. */
 static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 			      struct folio *src, struct folio *dst,
-			      enum migrate_mode mode, enum migrate_reason reason,
-			      struct list_head *ret, bool already_copied)
+			      enum migrate_mode mode, struct list_head *ret,
+			      bool already_copied,
+			      struct folio_migration_state *mstate)
 {
 	int rc;
-	int old_folio_state = 0;
-	struct anon_vma *anon_vma = NULL;
-	bool src_deferred_split = false;
-	bool src_partially_mapped = false;
 	struct list_head *prev;
 
-	__migrate_folio_extract(dst, &old_folio_state, &anon_vma);
+	mstate->src = src;
+	mstate->dst = dst;
+	mstate->src_deferred_split = false;
+	mstate->src_partially_mapped = false;
+	mstate->movable_ops = false;
+
+	__migrate_folio_extract(dst, &mstate->old_folio_state, &mstate->anon_vma);
 	prev = dst->lru.prev;
 	list_del(&dst->lru);
 
 	if (unlikely(page_has_movable_ops(&src->page))) {
+		mstate->movable_ops = true;
 		rc = migrate_movable_ops_page(&dst->page, &src->page, mode);
 		if (rc)
 			goto out;
-		goto out_unlock_both;
+		return 0;
 	}
 
 	if (folio_order(src) > 1 &&
 	    !data_race(list_empty(&src->_deferred_list))) {
-		src_deferred_split = true;
-		src_partially_mapped = folio_test_partially_mapped(src);
+		mstate->src_deferred_split = true;
+		mstate->src_partially_mapped = folio_test_partially_mapped(src);
 	}
 
 	rc = move_to_new_folio(dst, src, mode, already_copied);
-	if (rc)
-		goto out;
+	if (!rc)
+		return 0;
+out:
+	/*
+	 * A folio that has not been migrated will be restored to
+	 * right list unless we want to retry.
+	 */
+	if (rc == -EAGAIN) {
+		list_add(&dst->lru, prev);
+		__migrate_folio_record(dst, mstate->old_folio_state,
+				       mstate->anon_vma);
+		return rc;
+	}
+
+	migrate_folio_undo_src(src, mstate->old_folio_state & FOLIO_WAS_MAPPED,
+			       mstate->anon_vma, true, ret);
+	migrate_folio_undo_dst(dst, true, put_new_folio, private);
+
+	return rc;
+}
+
+static void migrate_folio_remap(struct folio_migration_state *mstate,
+		enum migrate_reason reason)
+{
+	if (unlikely(mstate->movable_ops))
+		goto out_unlock_both;
 
 	/*
 	 * Requeue the destination folio on the deferred split queue if
@@ -1450,8 +1491,8 @@ static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 	 * __folio_migrate_mapping(), so we recorded the state from
 	 * before move_to_new_folio().
 	 */
-	if (src_deferred_split)
-		deferred_split_folio(dst, src_partially_mapped);
+	if (mstate->src_deferred_split)
+		deferred_split_folio(mstate->dst, mstate->src_partially_mapped);
 
 	/*
 	 * When successful, push dst to LRU immediately: so that if it
@@ -1462,51 +1503,33 @@ static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 	 * unsuccessful, and other cases when a page has been temporarily
 	 * isolated from the unevictable LRU: but this case is the easiest.
 	 */
-	folio_add_lru(dst);
-	if (old_folio_state & FOLIO_WAS_MLOCKED)
+	folio_add_lru(mstate->dst);
+	if (mstate->old_folio_state & FOLIO_WAS_MLOCKED)
 		lru_add_drain();
 
-	if (old_folio_state & FOLIO_WAS_MAPPED)
-		remove_migration_ptes(src, dst, 0);
+	if (mstate->old_folio_state & FOLIO_WAS_MAPPED)
+		remove_migration_ptes(mstate->src, mstate->dst, 0);
 
 out_unlock_both:
-	folio_unlock(dst);
-	folio_set_owner_migrate_reason(dst, reason);
+	folio_unlock(mstate->dst);
+	folio_set_owner_migrate_reason(mstate->dst, reason);
 	/*
 	 * If migration is successful, decrease refcount of dst,
 	 * which will not free the page because new page owner increased
 	 * refcounter.
 	 */
-	folio_put(dst);
+	folio_put(mstate->dst);
 
 	/*
 	 * A folio that has been migrated has all references removed
 	 * and will be freed.
 	 */
-	list_del(&src->lru);
+	list_del(&mstate->src->lru);
 	/* Drop an anon_vma reference if we took one */
-	if (anon_vma)
-		put_anon_vma(anon_vma);
-	folio_unlock(src);
-	migrate_folio_done(src, reason);
-
-	return rc;
-out:
-	/*
-	 * A folio that has not been migrated will be restored to
-	 * right list unless we want to retry.
-	 */
-	if (rc == -EAGAIN) {
-		list_add(&dst->lru, prev);
-		__migrate_folio_record(dst, old_folio_state, anon_vma);
-		return rc;
-	}
-
-	migrate_folio_undo_src(src, old_folio_state & FOLIO_WAS_MAPPED,
-			       anon_vma, true, ret);
-	migrate_folio_undo_dst(dst, true, put_new_folio, private);
-
-	return rc;
+	if (mstate->anon_vma)
+		put_anon_vma(mstate->anon_vma);
+	folio_unlock(mstate->src);
+	migrate_folio_done(mstate->src, reason);
 }
 
 /*
@@ -1787,11 +1810,16 @@ static void migrate_folios_move(struct list_head *src_folios,
 		struct list_head *ret_folios,
 		struct migrate_pages_stats *stats,
 		int *retry, int *thp_retry, int *nr_failed,
-		int *nr_retry_pages, bool already_copied)
+		int *nr_retry_pages, bool already_copied,
+		struct folio_migration_state *mstates)
 {
 	struct folio *folio, *folio2, *dst, *dst2;
+	struct folio_migration_state stack_mstate;
+	struct folio_migration_state *mstate;
+	int nr_moved = 0;
 	bool is_thp;
 	int nr_pages;
+	int i;
 	int rc;
 
 	dst = list_first_entry(dst_folios, struct folio, lru);
@@ -1802,9 +1830,13 @@ static void migrate_folios_move(struct list_head *src_folios,
 
 		cond_resched();
 
+		mstate = mstates ? &mstates[nr_moved] : &stack_mstate;
+		mstate->nr_pages = nr_pages;
+		mstate->is_thp = is_thp;
+
 		rc = migrate_folio_move(put_new_folio, private,
-				folio, dst, mode,
-				reason, ret_folios, already_copied);
+				folio, dst, mode, ret_folios, already_copied,
+				mstate);
 		/*
 		 * The rules are:
 		 *	0: folio will be freed
@@ -1818,8 +1850,13 @@ static void migrate_folios_move(struct list_head *src_folios,
 			*nr_retry_pages += nr_pages;
 			break;
 		case 0:
-			stats->nr_succeeded += nr_pages;
-			stats->nr_thp_succeeded += is_thp;
+			if (mstates) {
+				nr_moved++;
+			} else {
+				migrate_folio_remap(mstate, reason);
+				stats->nr_succeeded += nr_pages;
+				stats->nr_thp_succeeded += is_thp;
+			}
 			break;
 		default:
 			*nr_failed += 1;
@@ -1829,6 +1866,12 @@ static void migrate_folios_move(struct list_head *src_folios,
 		}
 		dst = dst2;
 		dst2 = list_next_entry(dst, lru);
+	}
+
+	for (i = 0; i < nr_moved; i++) {
+		migrate_folio_remap(&mstates[i], reason);
+		stats->nr_succeeded += mstates[i].nr_pages;
+		stats->nr_thp_succeeded += mstates[i].is_thp;
 	}
 }
 
@@ -1881,6 +1924,7 @@ static int migrate_pages_batch(struct list_head *from,
 	int rc, rc_saved = 0, nr_pages;
 	unsigned int nr_batch = 0;
 	bool do_batch = false, batch_copied = false;
+	struct folio_migration_state *mstates = NULL;
 	LIST_HEAD(unmap_batch);
 	LIST_HEAD(dst_batch);
 	LIST_HEAD(unmap_single);
@@ -1889,6 +1933,10 @@ static int migrate_pages_batch(struct list_head *from,
 
 	VM_WARN_ON_ONCE(mode != MIGRATE_ASYNC &&
 			!list_empty(from) && !list_is_singular(from));
+
+	if (!list_empty(from) && !list_is_singular(from))
+		mstates = kvcalloc(list_count_nodes(from), sizeof(*mstates),
+				   GFP_NOWAIT | __GFP_NOWARN);
 
 	do_batch = migrate_offload_do_batch(reason);
 	trace_migrate_pages_batch_unmap_begin(mode, reason, nr_batch);
@@ -2092,7 +2140,7 @@ move:
 			migrate_folios_move(&unmap_batch, &dst_batch, put_new_folio,
 					private, mode, reason, ret_folios, stats,
 					&retry, &thp_retry, &nr_failed,
-					&nr_retry_pages, batch_copied);
+					&nr_retry_pages, batch_copied, mstates);
 			trace_migrate_folios_move_end(mode, reason, true,
 					batch_copied, nr_batch);
 		}
@@ -2102,7 +2150,7 @@ move:
 			migrate_folios_move(&unmap_single, &dst_single,	put_new_folio,
 					private, mode, reason, ret_folios, stats,
 					&retry, &thp_retry, &nr_failed,
-					&nr_retry_pages, false);
+					&nr_retry_pages, false, mstates);
 			trace_migrate_folios_move_end(mode, reason, false,
 					false, 0);
 		}
@@ -2119,6 +2167,7 @@ out:
 	migrate_folios_undo(&unmap_single, &dst_single,
 			put_new_folio, private, ret_folios);
 
+	kvfree(mstates);
 	return rc;
 }
 
