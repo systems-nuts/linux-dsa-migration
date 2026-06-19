@@ -275,6 +275,7 @@ out:
 static struct migrator idxd_dma_migrator = {
 	.name = "idxd",
 	.offload_copy = folios_copy_dma,
+	.complete_copy = complete_copy,
 	.owner = THIS_MODULE,
 };
 

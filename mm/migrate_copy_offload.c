@@ -11,6 +11,13 @@ static struct migrator *active_migrator;
 
 DECLARE_STATIC_CALL(migrate_offload_copy, folios_mc_copy);
 
+int migrate_offload_complete_nop(void)
+{
+	return 0;
+}
+
+DECLARE_STATIC_CALL(migrate_offload_complete, migrate_offload_complete_nop);
+
 /**
  * migrate_offload_register - register a batch-copy provider for page migration.
  * @m: migrator to install.
@@ -39,6 +46,8 @@ int migrate_offload_register(struct migrator *m)
 	}
 
 	static_call_update(migrate_offload_copy, m->offload_copy);
+	if (m->complete_copy)
+		static_call_update(migrate_offload_complete, m->complete_copy);
 	active_migrator = m;
 	static_branch_enable(&migrate_offload_enabled);
 
@@ -80,6 +89,7 @@ int migrate_offload_unregister(struct migrator *m)
 	 */
 	static_branch_disable(&migrate_offload_enabled);
 	static_call_update(migrate_offload_copy, folios_mc_copy);
+	static_call_update(migrate_offload_complete, migrate_offload_complete_nop);
 	owner = active_migrator->owner;
 	active_migrator = NULL;
 	mutex_unlock(&migrator_mutex);

@@ -60,6 +60,7 @@ DEFINE_STATIC_KEY_FALSE(migrate_offload_enabled);
 #ifdef CONFIG_MIGRATION_COPY_OFFLOAD
 DEFINE_SRCU(migrate_offload_srcu);
 DEFINE_STATIC_CALL(migrate_offload_copy, folios_mc_copy);
+DEFINE_STATIC_CALL(migrate_offload_complete, migrate_offload_complete_nop);
 
 static bool migrate_offload_do_batch(int reason)
 {
@@ -88,6 +89,16 @@ static int migrate_offload_batch_copy(struct list_head *dst_batch,
 	srcu_read_unlock(&migrate_offload_srcu, idx);
 	return rc;
 }
+
+static int migrate_offload_complete_copy(void)
+{
+	int idx, rc;
+
+	idx = srcu_read_lock(&migrate_offload_srcu);
+	rc = static_call(migrate_offload_complete)();
+	srcu_read_unlock(&migrate_offload_srcu, idx);
+	return rc;
+}
 #else
 static bool migrate_offload_do_batch(int reason)
 {
@@ -100,7 +111,31 @@ static int migrate_offload_batch_copy(struct list_head *dst_batch,
 {
 	return -EOPNOTSUPP;
 }
+
+static int migrate_offload_complete_copy(void)
+{
+	return -EOPNOTSUPP;
+}
 #endif
+
+static void migrate_folios_wait_copy(enum migrate_mode mode, int reason,
+				     bool batched, bool already_copied,
+				     unsigned int nr_batch, bool *copy_waited)
+{
+	int rc;
+
+	if (!batched || !already_copied || *copy_waited)
+		return;
+
+	trace_migrate_folios_move_wait_copy_begin(mode, reason, batched,
+						  already_copied, nr_batch);
+	rc = migrate_offload_complete_copy();
+	trace_migrate_folios_move_wait_copy_end(mode, reason, batched,
+						already_copied, nr_batch);
+	if (rc)
+		panic("migrate_offload_complete_copy failed: %d\n", rc);
+	*copy_waited = true;
+}
 
 static const struct movable_operations *offline_movable_ops;
 static const struct movable_operations *zsmalloc_movable_ops;
@@ -1426,9 +1461,12 @@ struct folio_migration_state {
 /* Migrate the folio to the newly allocated folio in dst. */
 static int migrate_folio_move(free_folio_t put_new_folio, unsigned long private,
 			      struct folio *src, struct folio *dst,
-			      enum migrate_mode mode, struct list_head *ret,
+			      enum migrate_mode mode, int reason,
+			      struct list_head *ret,
 			      bool already_copied,
-			      struct folio_migration_state *mstate)
+			      struct folio_migration_state *mstate,
+			      bool *copy_waited, bool batched,
+			      unsigned int nr_batch)
 {
 	int rc;
 	struct list_head *prev;
@@ -1471,6 +1509,9 @@ out:
 				       mstate->anon_vma);
 		return rc;
 	}
+
+	migrate_folios_wait_copy(mode, reason, batched, already_copied,
+				 nr_batch, copy_waited);
 
 	migrate_folio_undo_src(src, mstate->old_folio_state & FOLIO_WAS_MAPPED,
 			       mstate->anon_vma, true, ret);
@@ -1811,12 +1852,14 @@ static void migrate_folios_move(struct list_head *src_folios,
 		struct migrate_pages_stats *stats,
 		int *retry, int *thp_retry, int *nr_failed,
 		int *nr_retry_pages, bool already_copied,
+		bool batched, unsigned int nr_batch,
 		struct folio_migration_state *mstates)
 {
 	struct folio *folio, *folio2, *dst, *dst2;
 	struct folio_migration_state stack_mstate;
 	struct folio_migration_state *mstate;
 	int nr_moved = 0;
+	bool copy_waited = false;
 	bool is_thp;
 	int nr_pages;
 	int i;
@@ -1835,8 +1878,9 @@ static void migrate_folios_move(struct list_head *src_folios,
 		mstate->is_thp = is_thp;
 
 		rc = migrate_folio_move(put_new_folio, private,
-				folio, dst, mode, ret_folios, already_copied,
-				mstate);
+				folio, dst, mode, reason, ret_folios,
+				already_copied, mstate, &copy_waited, batched,
+				nr_batch);
 		/*
 		 * The rules are:
 		 *	0: folio will be freed
@@ -1853,6 +1897,8 @@ static void migrate_folios_move(struct list_head *src_folios,
 			if (mstates) {
 				nr_moved++;
 			} else {
+				migrate_folios_wait_copy(mode, reason, batched,
+						already_copied, nr_batch, &copy_waited);
 				migrate_folio_remap(mstate, reason);
 				stats->nr_succeeded += nr_pages;
 				stats->nr_thp_succeeded += is_thp;
@@ -1867,6 +1913,9 @@ static void migrate_folios_move(struct list_head *src_folios,
 		dst = dst2;
 		dst2 = list_next_entry(dst, lru);
 	}
+
+	migrate_folios_wait_copy(mode, reason, batched, already_copied,
+				 nr_batch, &copy_waited);
 
 	for (i = 0; i < nr_moved; i++) {
 		migrate_folio_remap(&mstates[i], reason);
@@ -2140,7 +2189,8 @@ move:
 			migrate_folios_move(&unmap_batch, &dst_batch, put_new_folio,
 					private, mode, reason, ret_folios, stats,
 					&retry, &thp_retry, &nr_failed,
-					&nr_retry_pages, batch_copied, mstates);
+					&nr_retry_pages, batch_copied, true,
+					nr_batch, mstates);
 			trace_migrate_folios_move_end(mode, reason, true,
 					batch_copied, nr_batch);
 		}
@@ -2150,7 +2200,8 @@ move:
 			migrate_folios_move(&unmap_single, &dst_single,	put_new_folio,
 					private, mode, reason, ret_folios, stats,
 					&retry, &thp_retry, &nr_failed,
-					&nr_retry_pages, false, mstates);
+					&nr_retry_pages, false, false, 0,
+					mstates);
 			trace_migrate_folios_move_end(mode, reason, false,
 					false, 0);
 		}

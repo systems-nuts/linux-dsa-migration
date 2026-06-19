@@ -16,6 +16,7 @@ struct module;
  * struct migrator - batch-copy provider for page migration.
  * @name: name of the provider.
  * @offload_copy: copy @folio_cnt folios from @src_list to @dst_list.
+ * @complete_copy: wait for the provider's outstanding copy work.
  *
  *	The migrator may inspect @folio_cnt to decide whether the batch
  * 	is worth offloading, e.g. skip when the batch is too small to
@@ -28,12 +29,14 @@ struct migrator {
 	int (*offload_copy)(struct list_head *dst_list,
 			    struct list_head *src_list,
 			    unsigned int folio_cnt);
+	int (*complete_copy)(void);
 	struct module *owner;
 };
 
 #ifdef CONFIG_MIGRATION_COPY_OFFLOAD
 extern struct static_key_false migrate_offload_enabled;
 extern struct srcu_struct migrate_offload_srcu;
+int migrate_offload_complete_nop(void);
 int migrate_offload_register(struct migrator *m);
 int migrate_offload_unregister(struct migrator *m);
 #else
