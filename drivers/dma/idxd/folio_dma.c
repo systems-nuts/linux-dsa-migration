@@ -38,6 +38,8 @@ static size_t nr_wqs;
 
 static DEFINE_MUTEX(idxd_lock);
 
+static struct idxd_wq *active_wq;
+
 static inline void advance_list_head(struct list_head **head,
 		unsigned int nr_pos)
 {
@@ -218,57 +220,19 @@ static noinline int poll_completions(struct idxd_wq *wq, bool batch)
 	return rc;
 }
 
-static int idxd_copy_folios(struct list_head *dst_folios,
-		struct list_head *src_folios, unsigned int len,
-		bool batch, int nid, struct completion *completion)
+static int complete_copy(void)
 {
-	struct list_head *src_list = src_folios;
-	struct list_head *dst_list = dst_folios;
-	unsigned int submitted = 0, to_submit;
-	struct idxd_wq *wq;
-	int rc, wq_idx = 0;
+	unsigned int nr_descs = active_wq ? active_wq->nr_descs_in_flight : 0;
+	int ret = 0;
 
-	/*
-	 * Batching requires careful handling of the number of descriptors.
-	 * Disable it for now.
-	 */
-	BUG_ON(batch);
-
-	while (submitted < len) {
-		wq = wqs[wq_idx % nr_wqs];
-		BUG_ON(!wq);
-
-		if (wq->in_flight) {
-			poll_completions(wq, batch);
-			wq->in_flight = false;
-		}
-
-		to_submit = min_t(size_t, wq->size, len - submitted);
-
-		rc = submit_folios(wq, dst_list, src_list, to_submit, batch);
-		if (rc)
-			return rc;
-
-		submitted += to_submit;
-		advance_list_head(&src_list, to_submit);
-		advance_list_head(&dst_list, to_submit);
-		wq_idx++;
+	if (active_wq && active_wq->in_flight) {
+		ret = poll_completions(active_wq, false);
+		active_wq->in_flight = false;
 	}
+	active_wq = NULL;
+	mutex_unlock(&idxd_lock);
 
-	for (wq_idx = 0; wq_idx < nr_wqs; wq_idx++) {
-		wq = wqs[wq_idx];
-
-		if (wq->in_flight) {
-			poll_completions(wq, batch);
-			wq->in_flight = false;
-		}
-	}
-
-	if (completion)
-		complete(completion);
-
-	return 0;
-
+	return ret;
 }
 
 static int folios_copy_dma(struct list_head *dst_list,
@@ -278,15 +242,31 @@ static int folios_copy_dma(struct list_head *dst_list,
 
 	trace_idxd_folios_copy_dma_begin(nr_folios);
 
+	/*
+	 * This is going to be unlocked in complete_copy()
+	 */
 	if (!mutex_trylock(&idxd_lock)) {
 		ret = -EBUSY;
 		goto out;
 	}
 
-	ret = idxd_copy_folios(dst_list, src_list, nr_folios,
-			false, NUMA_NO_NODE, NULL);
-	mutex_unlock(&idxd_lock);
+	active_wq = wqs[numa_node_id()];
 
+	/*
+	 * Batching requires careful handling of the number of descriptors.
+	 * Disable it for now.
+	 */
+	if (!active_wq || nr_folios > active_wq->size) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	ret = submit_folios(active_wq, dst_list, src_list, nr_folios, false);
+	if (!ret)
+		goto out;
+unlock:
+	active_wq = NULL;
+	mutex_unlock(&idxd_lock);
 out:
 	trace_idxd_folios_copy_dma_end(nr_folios, ret);
 	return ret;
