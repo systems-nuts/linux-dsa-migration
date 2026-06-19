@@ -46,6 +46,44 @@ TRACE_EVENT(idxd_folios_copy_dma_end,
 		  __entry->ret)
 );
 
+TRACE_EVENT(idxd_complete_copy_begin,
+
+	TP_PROTO(unsigned int nr_descs),
+
+	TP_ARGS(nr_descs),
+
+	TP_STRUCT__entry(
+		__field(unsigned int, nr_descs)
+	),
+
+	TP_fast_assign(
+		__entry->nr_descs = nr_descs;
+	),
+
+	TP_printk("nr_descs=%u", __entry->nr_descs)
+);
+
+TRACE_EVENT(idxd_complete_copy_end,
+
+	TP_PROTO(unsigned int nr_descs, int ret),
+
+	TP_ARGS(nr_descs, ret),
+
+	TP_STRUCT__entry(
+		__field(unsigned int, nr_descs)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		__entry->nr_descs = nr_descs;
+		__entry->ret = ret;
+	),
+
+	TP_printk("nr_descs=%u ret=%d",
+		  __entry->nr_descs,
+		  __entry->ret)
+);
+
 #endif /* _IDXD_FOLIO_DMA_TRACE_H */
 
 #undef TRACE_INCLUDE_PATH

@@ -1867,6 +1867,8 @@ static void migrate_folios_move(struct list_head *src_folios,
 
 	dst = list_first_entry(dst_folios, struct folio, lru);
 	dst2 = list_next_entry(dst, lru);
+	trace_migrate_folio_move_loop_begin(mode, reason, batched,
+					    already_copied, nr_batch);
 	list_for_each_entry_safe(folio, folio2, src_folios, lru) {
 		is_thp = folio_test_large(folio) && folio_test_pmd_mappable(folio);
 		nr_pages = folio_nr_pages(folio);
@@ -1913,15 +1915,21 @@ static void migrate_folios_move(struct list_head *src_folios,
 		dst = dst2;
 		dst2 = list_next_entry(dst, lru);
 	}
+	trace_migrate_folio_move_loop_end(mode, reason, batched,
+					  already_copied, nr_batch);
 
 	migrate_folios_wait_copy(mode, reason, batched, already_copied,
 				 nr_batch, &copy_waited);
 
+	trace_migrate_folio_remap_loop_begin(mode, reason, batched,
+					     already_copied, nr_batch);
 	for (i = 0; i < nr_moved; i++) {
 		migrate_folio_remap(&mstates[i], reason);
 		stats->nr_succeeded += mstates[i].nr_pages;
 		stats->nr_thp_succeeded += mstates[i].is_thp;
 	}
+	trace_migrate_folio_remap_loop_end(mode, reason, batched,
+					   already_copied, nr_batch);
 }
 
 static void migrate_folios_undo(struct list_head *src_folios,

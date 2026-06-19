@@ -225,12 +225,14 @@ static int complete_copy(void)
 	unsigned int nr_descs = active_wq ? active_wq->nr_descs_in_flight : 0;
 	int ret = 0;
 
+	trace_idxd_complete_copy_begin(nr_descs);
 	if (active_wq && active_wq->in_flight) {
 		ret = poll_completions(active_wq, false);
 		active_wq->in_flight = false;
 	}
 	active_wq = NULL;
 	mutex_unlock(&idxd_lock);
+	trace_idxd_complete_copy_end(nr_descs, ret);
 
 	return ret;
 }
